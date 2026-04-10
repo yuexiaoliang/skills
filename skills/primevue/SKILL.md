@@ -1,6 +1,9 @@
 ---
 name: primevue
-description: PrimeVue UI component library skill. Use when building Vue.js applications with PrimeVue - a rich UI component suite with 100+ components. Triggers: Vue.js UI components, PrimeVue theming, PrimeVue pass-through styling, form validation with PrimeVue, PrimeVue component usage (Button, DataTable, Dialog, etc.).
+description: "PrimeVue UI component library for Vue.js with 100+ components. Covers design token theming, unstyled mode, pass-through (pt) styling, forms with validation, and component usage."
+metadata:
+  author: yuexiaoliang
+  version: "1.0.0"
 ---
 
 # PrimeVue

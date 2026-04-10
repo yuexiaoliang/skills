@@ -1,6 +1,9 @@
 ---
 name: hono
-description: Hono Web Framework skill. Use when working with Hono - a small, simple, ultrafast web framework for Cloudflare Workers, Deno, Bun, Vercel, Netlify, AWS Lambda, Node.js and other JavaScript runtimes. Triggers: building APIs with Hono, creating Hono apps, Hono middleware, Hono routing, Hono JSX, Hono RPC/client, Hono validators.
+description: "Hono web framework skill for building APIs across all JS runtimes (Cloudflare Workers, Deno, Bun, Node.js, etc.). Covers routing, middleware, JSX, RPC client, Zod validation, and context extensions."
+metadata:
+  author: yuexiaoliang
+  version: "1.0.0"
 ---
 
 # Hono
