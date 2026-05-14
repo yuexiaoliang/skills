@@ -320,9 +320,9 @@ Claude Code 在任务执行过程中可能弹出交互式菜单。这是任务�
 
 **适用**：符合第 7 节「瞬态错误识别」的判定原则时。
 
-**动作**：根据当前接续次数（in-memory 计数 `continue_attempts`，本次 babysitter 运行内累计）做退避，然后发送接续指令：
+**动作**：根据当前**连续**瞬态错误次数（in-memory 计数 `consecutive_transient_count`）做退避，然后发送接续指令：
 
-| `continue_attempts` | 等待时间 |
+| `consecutive_transient_count` | 等待时间 |
 | --- | --- |
 | 0（首次） | 2 分钟 |
 | 1 | 5 分钟 |
@@ -335,14 +335,19 @@ sleep <等待秒数>
 tmux send-keys -t {tmux_session}:0 "请继续" Enter
 ```
 
-发送后 `continue_attempts += 1`，重新进入第 7 节监测循环。
+发送后 `consecutive_transient_count += 1`，重新进入第 7 节监测循环。
 
 **重要约束：**
 
 - **接续不占用** `consecutive_failures` **和** `retry_count`：仅在 `failure_history` 中追加一条 `recovery_action: "接续执行"` 记录，便于事后审计；但不递增 `consecutive_failures`。理由：连续 5 次告警阈值是为策略性失败设计的，不应被网络抖动消耗。
-- **接续上限**：当 `continue_attempts >= 5` 且最新一次接续后仍判定为瞬态错误，**放弃接续**，回退到 10.2。
-- **回退后清零**：进入 10.2 时将 `continue_attempts` 清零。
-- **接续成功判定**：发送"请继续"后，若监测到活动指示器（`● Thinking`、`* Cascading...`、`Running...` 等）或任务列表 `◻ → ◼ → ✔` 推进，视为接续成功，重置 `continue_attempts = 0`，继续正常监测。
+- **接续上限**：当 `consecutive_transient_count >= 5` 且**最新一次**接续后仍判定为瞬态错误，**放弃接续**，回退到 10.2。
+- **回退后清零**：进入 10.2 时将 `consecutive_transient_count` 清零。
+- **接续成功判定（关键）**：发送"请继续"后，必须观察到**任务实质性推进**，才视为接续成功并立即重置 `consecutive_transient_count = 0`。**仅看到活动指示器（如 `● Thinking`）不等于成功**——那可能只是 Claude 在解析"请继续"这个输入本身。真正的接续成功要求以下任一：
+  - 任务列表状态变化：`◻ → ◼` 或 `◼ → ✔` 或新增任务项
+  - 监测到工具执行输出（如文件读写、命令执行结果）
+  - 监测到与当前任务直接相关的实质性输出（而非错误信息重复出现）
+  - **总结**：如果 2 个轮询周期（默认 2 × 60 秒）后 pane 内容显示任务在真实推进而不是持续报错，则判定成功
+- **计数器语义**：`consecutive_transient_count` 只统计**连续的**瞬态错误。只要有一次接续成功，计数器立即归零。整个任务执行期间出现 10 次、20 次非连续的瞬态错误，只要每次都成功接续，就永远不应因此回退到 10.2。
 
 ### 10.2 重试核心任务
 
@@ -408,7 +413,7 @@ tmux send-keys -t {tmux_session}:0 "{core_task}" Enter
 - 接续尝试**不**递增 `consecutive_failures` 和 `retry_count`。
 - 但仍向 `failure_history` 追加一条记录，`recovery_action: "接续执行"`，`error_summary` 写入观察到的瞬态错误文本摘要（截断到合理长度），便于事后追查。
 - `last_recovery_action` 在接续期间记为 `"接续执行"`；接续成功后正常运行不立即清零，待整体任务完成时随 `status: success` 一并清零。
-- `continue_attempts` 计数仅存在于内存（本次 babysitter 运行内），不持久化到 `state.json`。
+- `consecutive_transient_count` 计数仅存在于内存（本次 babysitter 运行内），不持久化到 `state.json`。
 
 ---
 

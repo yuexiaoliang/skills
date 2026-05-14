@@ -120,6 +120,6 @@
 | `consecutive_failures` | **不递增** | +1 |
 | `retry_count` | **不递增** | 按重试逻辑递增 |
 | `failure_history` | 追加一条（`recovery_action: "接续执行"`，`error_summary` 记录观察到的瞬态错误文本摘要） | 追加一条 |
-| 告警阈值 | 内存计数 `continue_attempts`；连续 5 次仍判定为瞬态错误后回退到重试核心任务 | `consecutive_failures >= 5` 触发用户告警 |
+| 告警阈值 | 内存计数 `consecutive_transient_count`；**连续** 5 次瞬态错误且接续均未成功才回退到重试核心任务 | `consecutive_failures >= 5` 触发用户告警 |
 
-`continue_attempts` 仅存在于内存（本次 babysitter 运行内），不持久化到 `state.json`，因为它表达的是"本次执行内的接续退避计数"，跨 babysitter 运行不应携带。
+`consecutive_transient_count` 仅存在于内存（本次 babysitter 运行内），不持久化到 `state.json`。它表达的是"当前连续瞬态错误的计数"——只要有一次接续成功（任务实质性推进），计数器立即归零。整个任务执行期间出现任意次数的非连续瞬态错误，只要每次都能成功接续，就永远不会因此回退到重试核心任务。
