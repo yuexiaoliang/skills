@@ -108,3 +108,18 @@
 - **自治恢复决策**：通过 `consecutive_failures` 和 `last_recovery_action` 避免重复无效的恢复方式。
 - **失败模式识别**：通过 `failure_history` 识别重复出现的失败模式。
 - **告警阈值**：当 `consecutive_failures >= 5` 时，停止自治并告警用户。
+
+## 接续执行的特殊语义
+
+`recovery_action` 是自由字符串字段，约定的取值包括 `"接续执行"`、`"重试核心任务"`、`"重启会话"`。其中 `"接续执行"` 针对瞬态错误（API 错误 / 超时 / 网络抖动 / 限流 / 过载等），与其他恢复动作有以下差异：
+
+| 维度 | 接续执行 | 重试核心任务 / 重启会话 |
+| --- | --- | --- |
+| 触发 | 符合第 7 节瞬态错误判定原则 | 信号失败 / 超时 / 任务中断 / 接续 5 次失败 |
+| 指令 | 发送 `请继续` | 发送 `{core_task}`（或先 `/exit` 再启动 + 发送 `{core_task}`） |
+| `consecutive_failures` | **不递增** | +1 |
+| `retry_count` | **不递增** | 按重试逻辑递增 |
+| `failure_history` | 追加一条（`recovery_action: "接续执行"`，`error_summary` 记录观察到的瞬态错误文本摘要） | 追加一条 |
+| 告警阈值 | 内存计数 `continue_attempts`；连续 5 次仍判定为瞬态错误后回退到重试核心任务 | `consecutive_failures >= 5` 触发用户告警 |
+
+`continue_attempts` 仅存在于内存（本次 babysitter 运行内），不持久化到 `state.json`，因为它表达的是"本次执行内的接续退避计数"，跨 babysitter 运行不应携带。

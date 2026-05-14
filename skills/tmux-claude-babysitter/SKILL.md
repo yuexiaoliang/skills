@@ -1,9 +1,7 @@
 ---
 name: tmux-claude-babysitter
-description: "Babysit a Claude Code instance running inside a tmux session. Activate ONLY when user's message starts with '/tmux-claude-babysitter'. The prefix is stripped; the remaining natural language content is parsed by the model to extract parameters. If project_dir is missing, ask the user. Covers: session creation, Claude Code startup, idle/menu detection, interactive menu handling, task completion determination, error recovery with retry/restart, state tracking, and logging."
-metadata:
-  author: yuexiaoliang
-  version: "1.0.0"
+description: 'Babysit a Claude Code instance running inside a tmux session. Activate ONLY when user''s message starts with ''/tmux-claude-babysitter''. The prefix is stripped; the remaining natural language content is parsed by the model to extract parameters. If project_dir is missing, ask the user. Covers: session creation, Claude Code startup, idle/menu detection, interactive menu handling, task completion determination, error recovery with retry/restart, state tracking, and logging.'
+metadata: '{"author":"yuexiaoliang","version":"1.0.1"}'
 ---
 # Tmux Claude Babysitter
 
@@ -62,7 +60,7 @@ metadata:
  1. 读取 `{state_dir}/state.json`，了解历史执行上下文
  2. 检查 tmux `{tmux_session}` 会话，不存在则创建
  3. 在 tmux `{tmux_session}` 会话中启动 Claude Code（若当前未运行）
- 4. 确保处于 idle 状态（取消可能存在的交互式菜单）
+ 4. 进入干净 idle 状态：取消可能存在的菜单；若 Claude 是上次遗留运行的，发送 `/clear` 清理历史上下文
  5. 发送 `{core_task}` 指令
  6. 监测任务执行，轮询 pane 内容
  7. 处理交互式菜单
@@ -133,10 +131,12 @@ tmux capture-pane -t {tmux_session}:0 -p | tail -20
 | 特征 | 含义 | 动作 |
 | --- | --- | --- |
 | 看到 bash 提示符（`$` 或 `~$`） | 未运行 | 进入步骤 4 启动 |
-| 看到 `❯` 或 Claude UI 元素 | 已在运行 | 进入步骤 5 |
+| 看到 `❯` 或 Claude UI 元素 | 已在运行（上次遗留） | 进入步骤 5；**步骤 5.2 会发送 `/clear` 清理历史上下文** |
 | 看到活动指示器（`● Thinking` 等） | 正在执行 | 直接进入步骤 7 监测 |
 
 **提示符检测启发式：** 以 `❯` 或 `>` 开头且后面紧跟空格的行，视为 Claude Code 提示符。
+
+**记录状态**：本步骤需要记录"本次 babysitter 是否启动了 Claude"（in-memory 标志 `claude_started_by_self`），步骤 5.2 据此决定是否清理上下文。
 
 ---
 
@@ -160,7 +160,9 @@ tmux send-keys -t {tmux_session}:0 "cd {project_dir} && claude --dangerously-ski
 
 ---
 
-## 5. 确保处于 idle 状态
+## 5. 进入干净 idle 状态
+
+### 5.1 取消可能存在的菜单
 
 如果 Claude 显示交互式菜单（编号选项），先发送 Escape 取消，等待 2 秒：
 
@@ -170,6 +172,27 @@ sleep 2
 ```
 
 **检测菜单：** 获取 pane 内容，查找编号选项 + `❯ 1. ... 2. ...` 格式。
+
+### 5.2 清理历史上下文（仅当 Claude 是上次遗留运行时）
+
+**触发条件**：步骤 3 中的 `claude_started_by_self` 标志为 `false`，即第 3 节检测结果为「已在运行」、本次 babysitter 没有执行步骤 4 启动 Claude。
+
+**理由**：上一轮任务的对话历史会污染本次任务 —— 浪费 context、可能让 Claude 误判"已经做过 X"、可能触发不必要的 compaction。本次 babysitter 自己刚启动的 Claude 进程上下文本来就是干净的，无需此步。
+
+**操作**：
+
+```bash
+tmux send-keys -t {tmux_session}:0 "/clear" Enter
+sleep 3
+```
+
+然后捕获 pane 内容确认 `❯` 提示符仍在，且 pane 不再展示历史对话痕迹（通常 `/clear` 会清空可视区域，仅保留欢迎信息或空白）。
+
+**容错**：
+
+- 若 `/clear` 后看到确认菜单，按 5.1 处理（多数版本不需要）。
+- 若 3 秒后 `❯` 未恢复或 Claude 出现异常状态，回退到一次"重启会话"流程（参考 10.3）：发送 `/exit`、等待、重新 `claude --dangerously-skip-permissions` 启动。
+- 若 `claude_started_by_self` 为 `true`（本次 babysitter 自己启动了 Claude），**跳过本节**。
 
 ---
 
@@ -211,6 +234,43 @@ tmux capture-pane -t {tmux_session}:0 -p | tail -30
 
 **最大等待时间：** `{max_wait_minutes}` 分钟。Claude 可能在运行 `gh run watch` 等待 CI/CD 部署，要等待。
 
+### 瞬态错误识别
+
+监测时若 pane 内容（最近 30 行）中出现**瞬态错误**特征，进入接续执行恢复（见 10.1）。
+
+**判定原则（语义而非关键词匹配）：**
+
+瞬态错误 = 失败原因发生在 Claude 自身工作之外、且重试有合理成功概率的错误。典型来源：
+
+- 模型 API / SDK 远端调用失败（5xx 服务端、429 限流、529 过载、网络超时、连接重置、流式中断）
+- 网络层故障（DNS、TCP、TLS、代理）
+- 临时性资源不可用（gateway timeout、service unavailable）
+
+**代表性示例**（仅用于辅助理解，**不是闭集**；遇到语义类似的错误同样视为瞬态）：
+
+- `API Error: 529 overloaded` / `OverloadedError`
+- `Request timed out` / `APITimeoutError` / `Gateway timeout`
+- `Connection reset` / `fetch failed` / `ECONNRESET` / `APIConnectionError`
+- `Streaming error` / `stream interrupted`
+- `Rate limit exceeded` / `Too many requests`
+
+**反例（不是瞬态错误，跳过接续，直接走 10.2 重试核心任务）：**
+
+- `[TASK_FAILED]` 信号 —— 业务侧主动汇报失败，应整体重试
+- 权限被拒（`Permission denied`、`401 Unauthorized`、`403 Forbidden`）—— 重试无意义
+- 语法/逻辑错误（如 Claude 自身写出错误代码导致 lint/test/build 失败）—— 属任务内问题，由 Claude 自己修正
+- 任务列表 `◼` 卡住但 pane 无任何错误信息 —— 属意外中断，按任务被中断路径处理
+- 资源不存在 / 配置缺失（`No such file`、`Repository not found`）—— 重试不解决根因
+
+**判定指引：**
+
+不确定时倾向判定为"瞬态错误"。代价分析：
+
+- 误判为瞬态：最多浪费 62 分钟退避（2+5+10+15+30）后自动回退到 10.2，代价可控。
+- 误判为非瞬态：立即重发 `{core_task}`，**丢弃已完成进度**，代价高。
+
+故判定阈值偏向接续。
+
 ---
 
 ## 8. 交互式菜单处理（关键）
@@ -249,10 +309,41 @@ Claude Code 在任务执行过程中可能弹出交互式菜单。这是任务�
 1. 收到 `[TASK_FAILED]` 信号。
 2. 超时（超过 `{max_wait_minutes}` 分钟未收到完成信号）。
 3. **任务被中断**：任务列表中存在 `◼`，但提示符已回到 `❯` 且 `{poll_interval_seconds}` 秒内无活动指示器。
+4. **瞬态错误**：pane 中观察到第 7 节「瞬态错误识别」描述的特征（无需等到完成信号）。
 
 **恢复流程（优先级顺序）：**
 
-### 10.1 重试核心任务
+### 10.1 接续执行（瞬态错误优先）
+
+**适用**：符合第 7 节「瞬态错误识别」的判定原则时。
+
+**动作**：根据当前接续次数（in-memory 计数 `continue_attempts`，本次 babysitter 运行内累计）做退避，然后发送接续指令：
+
+| `continue_attempts` | 等待时间 |
+| --- | --- |
+| 0（首次） | 2 分钟 |
+| 1 | 5 分钟 |
+| 2 | 10 分钟 |
+| 3 | 15 分钟 |
+| 4 | 30 分钟 |
+
+```bash
+sleep <等待秒数>
+tmux send-keys -t {tmux_session}:0 "请继续" Enter
+```
+
+发送后 `continue_attempts += 1`，重新进入第 7 节监测循环。
+
+**重要约束：**
+
+- **接续不占用** `consecutive_failures` **和** `retry_count`：仅在 `failure_history` 中追加一条 `recovery_action: "接续执行"` 记录，便于事后审计；但不递增 `consecutive_failures`。理由：连续 5 次告警阈值是为策略性失败设计的，不应被网络抖动消耗。
+- **接续上限**：当 `continue_attempts >= 5` 且最新一次接续后仍判定为瞬态错误，**放弃接续**，回退到 10.2。
+- **回退后清零**：进入 10.2 时将 `continue_attempts` 清零。
+- **接续成功判定**：发送"请继续"后，若监测到活动指示器（`● Thinking`、`* Cascading...`、`Running...` 等）或任务列表 `◻ → ◼ → ✔` 推进，视为接续成功，重置 `continue_attempts = 0`，继续正常监测。
+
+### 10.2 重试核心任务
+
+**适用**：非瞬态错误，或 10.1 接续 5 次仍失败。
 
 等待 2 分钟后发送：
 
@@ -260,11 +351,11 @@ Claude Code 在任务执行过程中可能弹出交互式菜单。这是任务�
 tmux send-keys -t {tmux_session}:0 "{core_task}" Enter
 ```
 
-然后重新进入监测循环。
+然后重新进入监测循环。本次记入 `consecutive_failures += 1`，`last_recovery_action = "重试核心任务"`。
 
-### 10.2 重启会话
+### 10.3 重启会话
 
-如果重试后仍然失败：
+如果 10.2 重试后仍然失败：
 
 ```bash
 tmux send-keys -t {tmux_session}:0 "/exit" Enter
@@ -274,15 +365,13 @@ sleep 20
 tmux send-keys -t {tmux_session}:0 "{core_task}" Enter
 ```
 
-然后重新监测。
+然后重新监测。若 `skip_permissions` 为 `false`，移除 `--dangerously-skip-permissions`。记入 `consecutive_failures += 1`，`last_recovery_action = "重启会话"`。
 
-若 `skip_permissions` 为 `false`，移除 `--dangerously-skip-permissions`。
+### 10.4 告警用户
 
-### 10.3 告警用户
+如果以上方法均失效，或 `consecutive_failures >= 5`，停止自治并告警用户，说明失败原因、本次接续次数（若有）和已尝试的恢复动作。
 
-如果以上方法均失效，或 `consecutive_failures >= 5`，停止自治并告警用户，说明失败原因和已尝试的恢复动作。
-
-**避免重复无效恢复：** 每次自治前查看 `state.json`。如果 `last_recovery_action` 是「重试」且还是失败，下次就换「重启会话」。
+**避免重复无效恢复：** 每次自治前查看 `state.json`。如果 `last_recovery_action` 是「重试核心任务」且本次仍失败，下次就换「重启会话」。
 
 ---
 
@@ -311,6 +400,13 @@ tmux send-keys -t {tmux_session}:0 "{core_task}" Enter
 }
 ```
 
+**接续执行的特殊规则：**
+
+- 接续尝试**不**递增 `consecutive_failures` 和 `retry_count`。
+- 但仍向 `failure_history` 追加一条记录，`recovery_action: "接续执行"`，`error_summary` 写入观察到的瞬态错误文本摘要（截断到合理长度），便于事后追查。
+- `last_recovery_action` 在接续期间记为 `"接续执行"`；接续成功后正常运行不立即清零，待整体任务完成时随 `status: success` 一并清零。
+- `continue_attempts` 计数仅存在于内存（本次 babysitter 运行内），不持久化到 `state.json`。
+
 ---
 
 ## 12. 日志与 git
@@ -319,7 +415,7 @@ tmux send-keys -t {tmux_session}:0 "{core_task}" Enter
 
 - 日志写入 `{state_dir}/logs/YYYY-MM-DD-HHMM.md`
 - **必须用中文**
-- 内容包括：执行时间、任务状态、错误摘要、恢复动作、耗时
+- 内容包括：执行时间、任务状态、错误摘要、恢复动作、瞬态错误的接续次数（若发生）、耗时
 
 ### 12.2 Git
 
@@ -359,7 +455,9 @@ git push
 | 发送按键 | `tmux send-keys -t {tmux_session}:0 "..." Enter` |
 | 发送 Escape | `tmux send-keys -t {tmux_session}:0 Escape` |
 | 启动 Claude | `cd {project_dir} && claude --dangerously-skip-permissions` |
+| 清理上下文 | `tmux send-keys -t {tmux_session}:0 "/clear" Enter` |
 | 发送任务 | `tmux send-keys -t {tmux_session}:0 "{core_task}" Enter` |
+| 发送接续 | `tmux send-keys -t {tmux_session}:0 "请继续" Enter` |
 | 发送退出 | `tmux send-keys -t {tmux_session}:0 "/exit" Enter` |
 
 ## Reference Docs
