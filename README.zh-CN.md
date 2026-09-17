@@ -12,6 +12,7 @@
 | **primevue** | 使用 PrimeVue 100+ 组件、设计令牌主题、unstyled / pass-through 样式、表单与校验。 |
 | **radix-motion** | 用 Motion（原 Framer Motion）为 Radix UI 原语添加进入/退出、布局、手势动画，仅使用免费 API。 |
 | **tailwindcss-mobile-first** | Tailwind CSS v4 的移动优先响应式设计，包含断点、容器查询、安全区域、触屏 vs 悬停。 |
+| **target-state-discipline** | 在重构、重写、迁移、需求变化和多轮修改中，以当前目标状态为唯一设计基准，清理旧目标、补丁历史残留和无证据兼容。 |
 | **tmux-claude-babysitter** | 在 tmux 会话中看护 Claude 实例：启动、空闲/菜单检测、错误自治恢复、状态持久化。仅在消息以 `/tmux-claude-babysitter` 开头时激活。 |
 | **xiexiu** | 邪修（heretical cultivator）方法论：质疑标准答案、第一性原理、用最小可行动作找出非常规捷径。 |
 
