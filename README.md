@@ -12,6 +12,7 @@ A personal collection of AI skills. A skill is a packaged set of instructions, s
 | **primevue** | Using PrimeVue's 100+ components, design-token theming, unstyled / pass-through styling, forms, and validation. |
 | **radix-motion** | Animating Radix UI primitives with Motion (formerly Framer Motion). Covers enter/exit, layout, and gesture animations using only free APIs. |
 | **tailwindcss-mobile-first** | Mobile-first responsive design with Tailwind CSS v4. Includes breakpoints, container queries, safe-area insets, and touch vs hover handling. |
+| **target-state-discipline** | Keeping refactors, rewrites, migrations, and multi-turn changes aligned with the current target state by removing obsolete goals, patch-history residue, and unsupported compatibility. |
 | **tmux-claude-babysitter** | Babysitting a headless Claude instance inside a tmux session: startup, idle/menu detection, error recovery, and state persistence. Activate only when message starts with `/tmux-claude-babysitter`. |
 | **xiexiu** | Unconventional problem-solving methodology: questioning standard answers, first-principles reasoning, and finding absurdly efficient shortcuts with minimum viable actions. |
 
